@@ -897,16 +897,15 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
     @SuppressWarnings("unchecked")
     protected TableRegularIndexDefinition getRegularIndexDefinitionFromOp(ParsedOp op, long l) {
         Map<String, Object> defMap = getFreeFormFromOp(op, l, "index_definition", true);
-        TableRegularIndexDefinition def = new TableRegularIndexDefinition();
         String column = (String) defMap.get("column");
         if (column == null) throw new OpConfigError("index_definition must contain 'column'");
-        def.column(column);
+        TableRegularIndexDefinition def = (TableRegularIndexDefinition) new TableRegularIndexDefinition().column(column);
         if (defMap.containsKey("ascii"))
-            def.ascii(Boolean.parseBoolean(String.valueOf(defMap.get("ascii"))));
+            def = (TableRegularIndexDefinition) def.ascii(Boolean.parseBoolean(String.valueOf(defMap.get("ascii"))));
         if (defMap.containsKey("normalize"))
-            def.normalize(Boolean.parseBoolean(String.valueOf(defMap.get("normalize"))));
+            def = (TableRegularIndexDefinition) def.normalize(Boolean.parseBoolean(String.valueOf(defMap.get("normalize"))));
         if (defMap.containsKey("case_sensitive"))
-            def.caseSensitive(Boolean.parseBoolean(String.valueOf(defMap.get("case_sensitive"))));
+            def = (TableRegularIndexDefinition) def.caseSensitive(Boolean.parseBoolean(String.valueOf(defMap.get("case_sensitive"))));
         return def;
     }
 
@@ -921,11 +920,9 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
     @SuppressWarnings("unchecked")
     protected TableTextIndexDefinition getTextIndexDefinitionFromOp(ParsedOp op, long l) {
         Map<String, Object> defMap = getFreeFormFromOp(op, l, "index_definition", true);
-        TableTextIndexDefinition def = new TableTextIndexDefinition();
         String column = (String) defMap.get("column");
         if (column == null) throw new OpConfigError("index_definition must contain 'column'");
-        def.column(column);
-        return def;
+        return (TableTextIndexDefinition) new TableTextIndexDefinition().column(column);
     }
 
     /**
@@ -941,12 +938,11 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
     @SuppressWarnings("unchecked")
     protected TableVectorIndexDefinition getVectorIndexDefinitionFromOp(ParsedOp op, long l) {
         Map<String, Object> defMap = getFreeFormFromOp(op, l, "index_definition", true);
-        TableVectorIndexDefinition def = new TableVectorIndexDefinition();
         String column = (String) defMap.get("column");
         if (column == null) throw new OpConfigError("index_definition must contain 'column'");
-        def.column(column);
+        TableVectorIndexDefinition def = (TableVectorIndexDefinition) new TableVectorIndexDefinition().column(column);
         if (defMap.containsKey("source_model"))
-            def.sourceModel(String.valueOf(defMap.get("source_model")));
+            def = (TableVectorIndexDefinition) def.sourceModel(String.valueOf(defMap.get("source_model")));
         return def;
     }
 
