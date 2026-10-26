@@ -379,11 +379,12 @@ blocks:
             #       providerKey: "SHARED_SECRET_EMBEDDING_API_KEY_VOYAGEAI"
             #     parameters:
             #       autoTruncate: true
-          primary_key:
-            partition_by: [id]
-            #### optional clustering columns (partition_sort):
-            # partition_sort:
-            #   age: asc
+          #### NOTE: the Data API createTable command only accepts camelCase here
+          primaryKey:
+            partitionBy: [id]
+            #### optional clustering columns (partitionSort; 1 = ascending, -1 = descending):
+            # partitionSort:
+            #   age: 1
         #### optional if_not_exists flag (default false):
         # if_not_exists: true
 
