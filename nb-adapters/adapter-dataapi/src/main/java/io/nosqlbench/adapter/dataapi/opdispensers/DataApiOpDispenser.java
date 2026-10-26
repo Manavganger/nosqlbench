@@ -938,9 +938,9 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
      */
     protected DropTypeOptions getDropTypeOptionsFromOp(ParsedOp op, long l) {
         DropTypeOptions options = new DropTypeOptions();
-        Optional<LongFunction<Boolean>> ieFunc = op.getAsOptionalFunction("if_exists", Boolean.class);
-        if (ieFunc.isPresent()) {
-            options = options.ifExists(ieFunc.get().apply(l));
+        Boolean ifExists = op.<Boolean>getAsFunctionOr("if_exists", null).apply(l);
+        if (ifExists != null) {
+            options = options.ifExists(ifExists);
         }
         return options;
     }
