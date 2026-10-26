@@ -31,8 +31,11 @@ import com.datastax.astra.client.core.vector.DataAPIVector;
 import com.datastax.astra.client.core.lexical.Analyzer;
 import com.datastax.astra.client.core.vector.SimilarityMetric;
 import com.datastax.astra.client.core.query.Projection;
+import com.datastax.astra.client.core.vectorize.VectorServiceOptions;
 import com.datastax.astra.client.tables.commands.AlterTableAddColumns;
+import com.datastax.astra.client.tables.commands.AlterTableAddVectorize;
 import com.datastax.astra.client.tables.commands.AlterTableDropColumns;
+import com.datastax.astra.client.tables.commands.AlterTableDropVectorize;
 import com.datastax.astra.client.tables.commands.AlterTableOperation;
 import com.datastax.astra.client.tables.commands.AlterTypeAddFields;
 import com.datastax.astra.client.tables.commands.AlterTypeOperation;
@@ -46,6 +49,7 @@ import com.datastax.astra.client.tables.commands.options.CreateTypeOptions;
 import com.datastax.astra.client.tables.commands.options.CreateVectorIndexOptions;
 import com.datastax.astra.client.tables.commands.options.DropTableIndexOptions;
 import com.datastax.astra.client.tables.commands.options.DropTypeOptions;
+import com.datastax.astra.client.tables.definition.columns.TableColumnDefinitionVector;
 import com.datastax.astra.client.tables.definition.columns.TableColumnTypes;
 import com.datastax.astra.client.tables.definition.indexes.TableRegularIndexDefinition;
 import com.datastax.astra.client.tables.definition.indexes.TableTextIndexDefinition;
@@ -934,7 +938,10 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
      */
     protected DropTypeOptions getDropTypeOptionsFromOp(ParsedOp op, long l) {
         DropTypeOptions options = new DropTypeOptions();
-        // DropTypeOptions has no if_exists in this SDK version, return as-is
+        Optional<LongFunction<Boolean>> ieFunc = op.getAsOptionalFunction("if_exists", Boolean.class);
+        if (ieFunc.isPresent()) {
+            options = options.ifExists(ieFunc.get().apply(l));
+        }
         return options;
     }
 
@@ -1136,10 +1143,18 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
 
     /**
      * Builds an {@link AlterTableOperation} from the op's "alter_op" field.
-     * Supports two sub-keys:
+     * Supports exactly one of these sub-keys:
      * <ul>
-     *   <li>{@code add} — map of columnName -&gt; type string to add to the table</li>
+     *   <li>{@code add} — map of columnName -&gt; column definition. The definition is either a
+     *       scalar type string, or a map with a {@code type} key: {@code vector} (optional
+     *       {@code dimension}, optional {@code service}), {@code list}/{@code set}
+     *       ({@code valueType}), {@code map} ({@code keyType}, {@code valueType}) or
+     *       {@code userDefined} ({@code udtName}). A collection {@code valueType} may itself be
+     *       a map {@code {type: userDefined, udtName: ...}}.</li>
      *   <li>{@code drop} — list of column names to remove from the table</li>
+     *   <li>{@code add_vectorize} — map of vectorColumnName -&gt; service map
+     *       ({@code provider}, {@code modelName}, optional {@code authentication}/{@code parameters})</li>
+     *   <li>{@code drop_vectorize} — list of vector column names to remove the service from</li>
      * </ul>
      * Note: the field is named "alter_op" (not "operation") because "operation" is a reserved
      * NB framework keyword that would be intercepted by the workload YAML parser.
@@ -1148,6 +1163,7 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
      * alter_op:
      *   add:
      *     new_col: text
+     *     embedding: {type: vector, dimension: 1024}
      * # or:
      * alter_op:
      *   drop:
@@ -1164,19 +1180,90 @@ public abstract class DataApiOpDispenser extends BaseOpDispenser<DataApiBaseOp, 
             Map<String, Object> addCols = (Map<String, Object>) opMap.get("add");
             AlterTableAddColumns addOp = new AlterTableAddColumns();
             for (Map.Entry<String, Object> e : addCols.entrySet()) {
-                String typeName = String.valueOf(e.getValue()).toUpperCase();
-                try {
-                    addOp.addColumn(e.getKey(), TableColumnTypes.valueOf(typeName));
-                } catch (IllegalArgumentException ex) {
-                    throw new OpConfigError("Unknown column type '" + e.getValue() + "' for column '" + e.getKey() + "'");
+                if (e.getValue() instanceof Map) {
+                    addColumnFromDefinition(addOp, e.getKey(), (Map<String, Object>) e.getValue());
+                } else {
+                    addOp.addColumn(e.getKey(), parseColumnType(e.getKey(), e.getValue()));
                 }
             }
             return addOp;
         } else if (opMap.containsKey("drop")) {
             List<String> dropCols = (List<String>) opMap.get("drop");
             return new AlterTableDropColumns(dropCols.toArray(new String[0]));
+        } else if (opMap.containsKey("add_vectorize")) {
+            Map<String, Object> cols = (Map<String, Object>) opMap.get("add_vectorize");
+            AlterTableAddVectorize addVectorize = new AlterTableAddVectorize();
+            for (Map.Entry<String, Object> e : cols.entrySet()) {
+                addVectorize.addColumn(e.getKey(), getVectorServiceOptions((Map<String, Object>) e.getValue()));
+            }
+            return addVectorize;
+        } else if (opMap.containsKey("drop_vectorize")) {
+            List<String> cols = (List<String>) opMap.get("drop_vectorize");
+            return new AlterTableDropVectorize(cols.toArray(new String[0]));
         }
-        throw new OpConfigError("operation must contain either 'add' or 'drop'");
+        throw new OpConfigError("operation must contain either 'add', 'drop', 'add_vectorize' or 'drop_vectorize'");
+    }
+
+    private TableColumnTypes parseColumnType(String column, Object rawType) {
+        try {
+            return TableColumnTypes.valueOf(String.valueOf(rawType).toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new OpConfigError("Unknown column type '" + rawType + "' for column '" + column + "'");
+        }
+    }
+
+    /** For a nested {@code valueType: {type: userDefined, udtName: X}} returns X, for a scalar type string returns null. */
+    @SuppressWarnings("unchecked")
+    private String getUdtName(Object valueType) {
+        return valueType instanceof Map ? String.valueOf(((Map<String, Object>) valueType).get("udtName")) : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void addColumnFromDefinition(AlterTableAddColumns addOp, String column, Map<String, Object> def) {
+        TableColumnTypes type = parseColumnType(column, def.get("type"));
+        Object valueType = def.get("valueType");
+        String udtName = getUdtName(valueType);
+        switch (type) {
+            case VECTOR -> {
+                TableColumnDefinitionVector vector = new TableColumnDefinitionVector();
+                if (def.get("dimension") != null) {
+                    vector.dimension(((Number) def.get("dimension")).intValue());
+                }
+                if (def.get("service") != null) {
+                    vector.service(getVectorServiceOptions((Map<String, Object>) def.get("service")));
+                }
+                addOp.addColumnVector(column, vector);
+            }
+            case LIST -> {
+                if (udtName != null) addOp.addColumnListUserDefinedType(column, udtName);
+                else addOp.addColumnList(column, parseColumnType(column, valueType));
+            }
+            case SET -> {
+                if (udtName != null) addOp.addColumnSetUserDefinedType(column, udtName);
+                else addOp.addColumnSet(column, parseColumnType(column, valueType));
+            }
+            case MAP -> {
+                TableColumnTypes keyType = parseColumnType(column, def.get("keyType"));
+                if (udtName != null) addOp.addColumnMapUserDefinedType(column, udtName, keyType);
+                else addOp.addColumnMap(column, keyType, parseColumnType(column, valueType));
+            }
+            case USERDEFINED -> addOp.addColumnUserDefinedType(column, String.valueOf(def.get("udtName")));
+            default -> addOp.addColumn(column, type);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private VectorServiceOptions getVectorServiceOptions(Map<String, Object> service) {
+        VectorServiceOptions options = new VectorServiceOptions()
+            .provider(String.valueOf(service.get("provider")))
+            .modelName(String.valueOf(service.get("modelName")));
+        if (service.get("authentication") != null) {
+            options.authentication((Map<String, Object>) service.get("authentication"));
+        }
+        if (service.get("parameters") != null) {
+            options.parameters((Map<String, Object>) service.get("parameters"));
+        }
+        return options;
     }
 
 }
