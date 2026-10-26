@@ -459,6 +459,8 @@ blocks:
       # the op value is the name of the UDT to drop:
       drtype:
         db_drop_type: "address_type"
+        #### optional: if_exists (default false):
+        # if_exists: true
   
       # "table_insert_one" - insert a single row into a table:
       ti1:
